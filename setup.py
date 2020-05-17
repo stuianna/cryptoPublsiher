@@ -26,6 +26,7 @@ setuptools.setup(
         'numpy',
         'appdirs',
         'config-checker',
-        'CMCLogger'
+        'CMCLogger',
+        'processOrg @ git+https://github.com/stuianna/processOrg'
     ],
 )

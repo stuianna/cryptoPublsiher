@@ -5,10 +5,10 @@ import time
 import argparse
 import socket
 import subprocess
+from cryptopublisher._version import __version__
 import dbops.timeconverter as timeconverter
 from dbops.influxhelper import InfluxHelper
 
-exec(open('cryptopublisher/_version.py').read())
 log = logging.getLogger(__name__)
 PUBLISHER_NAME = 'cryptoPublisher'
 
