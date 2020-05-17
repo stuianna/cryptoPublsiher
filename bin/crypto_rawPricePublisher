@@ -6,29 +6,26 @@ import sys
 import os
 import time
 from configchecker import ConfigChecker
-from dbops.influxhelper import InfluxHelper
 from cryptopublisher.cryptopublisher import CryptoPublisher as CryptoPublisher
 from cmclogger.cmclogger import CMCLogger
 import cmclogger.settings as CMCSetting
 
 log = logging.getLogger(__name__)
-PUBLISHER_NAME = 'rawPriceDataWriter'
+PUBLISHER_NAME = 'crypto_rawPricePublisher'
 DEFULT_TARGET_SYMBOLS = "BTC ETH LTC XRP USDT"
 DEFULT_TARGET_METRICS = "price volume_24h percent_change_1h percent_change_24h percent_change_7d"
 DEFAULT_INFLUX_DB_NAME = 'raw_crypto_price_data'
 DEFAULT_INTERVAL_SECONDS = 60
-CMC_DIRECTORY = None
-LOG_LEVEL = logging.INFO
 
 
-def setup_cmc(target_directory):
+def setup_cmc(target_directory, log_level):
     if target_directory is None:
         working_directory_cmc = appdirs.user_config_dir(CMCSetting.appNameDirectory)
     else:
-        working_directory_cmc = target_directory
+        working_directory_cmc = target_directory[0]
 
     try:
-        cmc = CMCLogger(working_directory_cmc, LOG_LEVEL)
+        cmc = CMCLogger(working_directory_cmc, log_level)
     except Exception as e:
         log.critical("Cannot setup CMCLogger, exception {}".format(e))
         return None
@@ -39,14 +36,6 @@ def setup_sqlite_database(cmc):
     if type(cmc) is not CMCLogger:
         return None
     return cmc.get_database()
-
-
-def setup_influx_database(db_name):
-    influx = InfluxHelper(db_name)
-    if influx.exists():
-        return influx
-    else:
-        return None
 
 
 def setup_configuration(working_directory):
@@ -92,6 +81,9 @@ def start_publisher(sqlite, influx, config):
             log.info("Updating symbol {}".format(symbol))
             last_influx_timestamp = CryptoPublisher.get_last_influx_timestamp(influx, symbol, metrics[0])
             new_entries = CryptoPublisher.get_new_sqlite_entries(sqlite, symbol, metrics, last_influx_timestamp)
+            if new_entries is None:
+                log.error("Cannot request SqLite table for symbol {}".format(symbol))
+                continue
             log.info("Found {} new entries for symbol {}.".format(len(new_entries), symbol))
 
             if not influx.insert(symbol, new_entries, metrics, None, True):
@@ -100,24 +92,59 @@ def start_publisher(sqlite, influx, config):
         time.sleep(config.get_value("Settings", "update_interval_seconds"))
 
 
+def add_additional_arguments(parser):
+
+    parser.add_argument(
+        '-s',
+        '--cmc_working_directory',
+        nargs=1,
+        help="Set the working directory for CMC Logger, if not supplied defaults to user config directory",
+        default=None)
+    return parser
+
+
 if __name__ == "__main__":
 
-    working_directory = CryptoPublisher.get_working_directory(PUBLISHER_NAME)
+    parser = CryptoPublisher.create_common_arguments()
+    parser = add_additional_arguments(parser)
+    args = parser.parse_args()
+
+    log_level = CryptoPublisher.process_log_level(args.log[0])
+
+    if args.working_directory is not None:
+        working_directory = CryptoPublisher.create_dir_if_not_exit(args.working_directory[0])
+    else:
+        working_directory = CryptoPublisher.get_working_directory(PUBLISHER_NAME)
     if working_directory is None:
         sys.exit(1)
-    CryptoPublisher.setup_logging(LOG_LEVEL, working_directory, 'log')
+
+    CryptoPublisher.setup_logging(log_level, working_directory, 'log')
+
+    if args.kill:
+        CryptoPublisher.kill(PUBLISHER_NAME)
+        sys.exit(0)
 
     config = setup_configuration(working_directory)
 
-    cmc = setup_cmc(CMC_DIRECTORY)
+    if args.generate_config is True:
+        sys.exit()
+
+    cmc = setup_cmc(args.cmc_working_directory, log_level)
     if cmc is None:
         sys.exit(1)
 
+    influx_db_name = config.get_value("Settings", 'influx_db_name')
     sqlite = setup_sqlite_database(cmc)
-    influx = setup_influx_database(config.get_value('Settings', 'influx_db_name'))
+    influx = CryptoPublisher.setup_influx_database(influx_db_name)
 
     if (sqlite is None) or (influx is None):
         log.critical("Failed to setup required databases")
         sys.exit(1)
 
-    start_publisher(sqlite, influx, config)
+    if args.clean is True:
+        CryptoPublisher.reset_influx_database(influx, influx_db_name)
+
+    if not CryptoPublisher.already_running(PUBLISHER_NAME):
+        start_publisher(sqlite, influx, config)
+
+    sys.exit()

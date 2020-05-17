@@ -6,7 +6,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="cryptopublisher",
-    scripts=['bin/crypto_rawPricePublisher.py'],
+    scripts=['bin/crypto_rawPricePublisher'],
     version=__version__,
     author="stuianna",
     author_email="stuian@protonmail.com",
