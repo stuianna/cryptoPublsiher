@@ -11,7 +11,7 @@ from dbops.influxhelper import InfluxHelper
 
 log = logging.getLogger(__name__)
 PUBLISHER_NAME = 'cryptoPublisher'
-MAXIMUM_UPDATE_SIZE = 10000
+MAXIMUM_UPDATE_SIZE = 5000
 
 
 class CryptoPublisher():
@@ -57,6 +57,9 @@ class CryptoPublisher():
         if len(df) > MAXIMUM_UPDATE_SIZE:
             extra_entries = True
 
+        if len(df) == 0:
+            return df, False
+
         df = df.loc[0:MAXIMUM_UPDATE_SIZE-1, fields + ['timestamp']]
         na_entries = df.isnull().sum().sum()
         if na_entries > 0:
@@ -83,7 +86,7 @@ class CryptoPublisher():
     def get_new_sqlite_entries(sqlite, table, column_filter, timestamp):
         new_entries = sqlite.get_row_range(table, 'timestamp', timestamp, int(time.time()))
         if new_entries is None:
-            return None
+            return None, True
         new_entries, extra_entries = CryptoPublisher.get_fiends_and_drop_na(new_entries, column_filter)
         return new_entries, extra_entries
 
