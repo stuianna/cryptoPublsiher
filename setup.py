@@ -26,5 +26,6 @@ setuptools.setup(
         'numpy',
         'appdirs',
         'config-checker',
+        'CMCLogger'
     ],
 )
