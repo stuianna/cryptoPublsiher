@@ -11,6 +11,7 @@ from dbops.influxhelper import InfluxHelper
 
 log = logging.getLogger(__name__)
 PUBLISHER_NAME = 'cryptoPublisher'
+MAXIMUM_UPDATE_SIZE = 5000
 
 
 class CryptoPublisher():
@@ -52,7 +53,7 @@ class CryptoPublisher():
                 log.error("Failed to remove measurement {}".format(symbol))
 
     def get_fiends_and_drop_na(df, fields):
-        df = df.loc[:, fields + ['timestamp']]
+        df = df.loc[0:MAXIMUM_UPDATE_SIZE-1, fields + ['timestamp']]
         na_entries = df.isnull().sum().sum()
         if na_entries > 0:
             log.warning("Dropping {} na entries".format(na_entries))
@@ -80,6 +81,7 @@ class CryptoPublisher():
         if new_entries is None:
             return None
         new_entries = CryptoPublisher.get_fiends_and_drop_na(new_entries, column_filter)
+        print(new_entries)
         return new_entries
 
     def create_common_arguments():
