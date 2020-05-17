@@ -80,7 +80,8 @@ def start_publisher(sqlite, influx, config):
         for symbol in symbols:
             log.info("Updating symbol {}".format(symbol))
             last_influx_timestamp = CryptoPublisher.get_last_influx_timestamp(influx, symbol, metrics[0])
-            new_entries = CryptoPublisher.get_new_sqlite_entries(sqlite, symbol, metrics, last_influx_timestamp)
+            new_entries, extra_entries = CryptoPublisher.get_new_sqlite_entries(sqlite, symbol, metrics,
+                                                                                last_influx_timestamp)
             if new_entries is None:
                 log.error("Cannot request SqLite table for symbol {}".format(symbol))
                 continue
@@ -89,6 +90,8 @@ def start_publisher(sqlite, influx, config):
             if not influx.insert(symbol, new_entries, metrics, None, True):
                 log.error("Failed to add {} new entries to database.".format(len(new_entries)))
 
+        if extra_entries:
+            continue
         time.sleep(config.get_value("Settings", "update_interval_seconds"))
 
 

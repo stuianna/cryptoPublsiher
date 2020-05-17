@@ -53,11 +53,15 @@ class CryptoPublisher():
                 log.error("Failed to remove measurement {}".format(symbol))
 
     def get_fiends_and_drop_na(df, fields):
+        extra_entries = False
+        if len(df) > MAXIMUM_UPDATE_SIZE:
+            extra_entries = True
+
         df = df.loc[0:MAXIMUM_UPDATE_SIZE-1, fields + ['timestamp']]
         na_entries = df.isnull().sum().sum()
         if na_entries > 0:
             log.warning("Dropping {} na entries".format(na_entries))
-        return df.dropna()
+        return df.dropna(), extra_entries
 
     def measurement_exists(influx, measurement):
         all_measurements = influx.get_measurement_names()
@@ -80,8 +84,8 @@ class CryptoPublisher():
         new_entries = sqlite.get_row_range(table, 'timestamp', timestamp, int(time.time()))
         if new_entries is None:
             return None
-        new_entries = CryptoPublisher.get_fiends_and_drop_na(new_entries, column_filter)
-        return new_entries
+        new_entries, extra_entries = CryptoPublisher.get_fiends_and_drop_na(new_entries, column_filter)
+        return new_entries, extra_entries
 
     def create_common_arguments():
         parser = argparse.ArgumentParser()
