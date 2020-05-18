@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+
+import logging
+import appdirs
+import sys
+import os
+import time
+import datetime
+from dateutil import tz
+import pandas as pd
+from configchecker import ConfigChecker
+from cryptopublisher.cryptopublisher import CryptoPublisher as CryptoPublisher
+from whalealert.whalealert import WhaleAlert
+from dbops.sqhelper import SQHelper
+from dbops.influxhelper import InfluxHelper
+import whalealert.settings as whaleSettings
+
+log = logging.getLogger(__name__)
+PUBLISHER_NAME = 'crypto_rawWhalePublisher'
+DEFAULT_TARGET_FIELDS = "amount amount_usd"
+DEFAULT_TARGET_TAGS = "blockchain from_owner from_owner_type symbol to_owner to_owner_type transaction_type"
+DEFAULT_INFLUX_DB_NAME = 'raw_whale_data'
+DEFAULT_INTERVAL_SECONDS = 60
+DEFAULT_MEASUREMENT_NAME = 'transactions'
+DEFAULT_LOG_NAME = 'transaction_log'
+
+
+def setup_whale(target_directory, log_level) -> WhaleAlert:
+    if target_directory is None:
+        working_directory_whale = appdirs.user_config_dir(whaleSettings.appNameDirectory)
+    else:
+        working_directory_whale = target_directory[0]
+
+    try:
+        whale = WhaleAlert(working_directory_whale, log_level)
+    except Exception as e:
+        log.critical("Cannot setup whale alert, exception {}".format(e))
+        return None
+    return whale
+
+
+def setup_sqlite_database(whale: WhaleAlert) -> SQHelper:
+    if type(whale) is not WhaleAlert:
+        return None
+    return whale.get_database()
+
+
+def setup_configuration(working_directory) -> ConfigChecker:
+    config = ConfigChecker()
+    config.set_expectation('Settings', 'update_interval_seconds', int, DEFAULT_INTERVAL_SECONDS)
+    config.set_expectation('Settings', 'influx_db_name', str, DEFAULT_INFLUX_DB_NAME)
+
+    config_file = os.path.join(working_directory, 'config.ini')
+    config.set_configuration_file(config_file)
+    config.write_configuration_file()
+    return config
+
+
+def start_publisher(sqlite: SQHelper, influx: InfluxHelper, config: ConfigChecker, whale: WhaleAlert):
+    interval = config.get_value("Settings", "update_interval_seconds")
+    blockchains = sqlite.get_table_names()
+    log.info("Starting publisher using blockchains {}.".format(", ".join(blockchains)))
+    fields = DEFAULT_TARGET_FIELDS.split(' ')
+    tags = DEFAULT_TARGET_TAGS.split(' ')
+
+    while True:
+        for blockchain in blockchains:
+            log.info("Updating transactions for blockchain: {}".format(blockchain))
+            last_influx_timestamp = CryptoPublisher.get_last_influx_timestamp(influx, DEFAULT_MEASUREMENT_NAME,
+                                                                              'amount', 'blockchain', blockchain)
+            new_entries, extra_entries = CryptoPublisher.get_new_sqlite_entries(sqlite, blockchain, fields + tags,
+                                                                                last_influx_timestamp)
+            if new_entries is None:
+                log.error("Cannot request SqLite table for blockchain {}".format(blockchain))
+                continue
+            log.info("Found {} new entries for symbol {}.".format(len(new_entries), blockchain))
+
+            if not influx.insert(DEFAULT_MEASUREMENT_NAME, new_entries, fields, tags, True):
+                log.error("Failed to add {} new entries to database.".format(len(new_entries)))
+
+            add_log_entries(new_entries, whale, influx)
+
+        if extra_entries:
+            continue
+
+        time.sleep(interval)
+
+
+def add_log_entries(new_entries: pd.DataFrame, whale: WhaleAlert, influx: InfluxHelper):
+    if len(new_entries) > 0:
+        log_entries = whale.dataframe_to_transaction_output(new_entries, pretty=True, as_dict=True)
+        for log_entry in log_entries:
+            try:
+                log_entry['timestamp'] = datetime.datetime.strptime(
+                    log_entry['timestamp'], "\x1b[33m%m/%d/%Y %H:%M:%S \x1b[0").astimezone(tz.tzlocal()).timestamp()
+            except Exception as e:
+                log.warning('Skipping log entry with timestamp: {}. Exception {}'.format(log_entry['timestamp'], e))
+
+        if not influx.insert(DEFAULT_LOG_NAME, pd.DataFrame(log_entries), ['text'], True):
+            log.error("Failed to add {} new log entries to database.".format(len(new_entries)))
+
+
+def add_additional_arguments(parser):
+
+    parser.add_argument(
+        '-s',
+        '--whale_working_directory',
+        nargs=1,
+        help="Set the working directory for Whale Alert logger, if not supplied defaults to user config directory",
+        default=None)
+    return parser
+
+
+if __name__ == "__main__":
+
+    parser = CryptoPublisher.create_common_arguments()
+    parser = add_additional_arguments(parser)
+    args = parser.parse_args()
+
+    log_level = CryptoPublisher.process_log_level(args.log[0])
+
+    if args.working_directory is not None:
+        working_directory = CryptoPublisher.create_dir_if_not_exit(args.working_directory[0])
+    else:
+        working_directory = CryptoPublisher.get_working_directory(PUBLISHER_NAME)
+    if working_directory is None:
+        sys.exit(1)
+
+    CryptoPublisher.setup_logging(log_level, working_directory, 'log')
+
+    if args.kill:
+        CryptoPublisher.kill(PUBLISHER_NAME)
+        sys.exit(0)
+
+    config = setup_configuration(working_directory)
+
+    if args.generate_config is True:
+        sys.exit()
+
+    whale = setup_whale(args.whale_working_directory, log_level)
+    if whale is None:
+        sys.exit(1)
+
+    influx_db_name = config.get_value("Settings", 'influx_db_name')
+    sqlite = setup_sqlite_database(whale)
+    influx = CryptoPublisher.setup_influx_database(influx_db_name)
+
+    if (sqlite is None) or (influx is None):
+        log.critical("Failed to setup required databases")
+        sys.exit(1)
+
+    if args.clean is True:
+        CryptoPublisher.reset_influx_database(influx, influx_db_name)
+
+    if not CryptoPublisher.already_running(PUBLISHER_NAME):
+        start_publisher(sqlite, influx, config, whale)
+
+    sys.exit()
