@@ -68,14 +68,14 @@ def start_publisher(sqlite: SQHelper, influx: InfluxHelper, config: ConfigChecke
             log.info("Updating transactions for blockchain: {}".format(blockchain))
             last_influx_timestamp = CryptoPublisher.get_last_influx_timestamp(influx, DEFAULT_MEASUREMENT_NAME,
                                                                               'amount', 'blockchain', blockchain)
-            new_entries, extra_entries = CryptoPublisher.get_new_sqlite_entries(sqlite, blockchain, fields + tags,
-                                                                                last_influx_timestamp)
+            new_entries, extra_entries, used_fields = CryptoPublisher.get_new_sqlite_entries(
+                sqlite, blockchain, fields + tags, last_influx_timestamp)
             if new_entries is None:
                 log.error("Cannot request SqLite table for blockchain {}".format(blockchain))
                 continue
             log.info("Found {} new entries for symbol {}.".format(len(new_entries), blockchain))
 
-            if not influx.insert(DEFAULT_MEASUREMENT_NAME, new_entries, fields, tags, True):
+            if not influx.insert(DEFAULT_MEASUREMENT_NAME, new_entries, used_fields, tags, True):
                 log.error("Failed to add {} new entries to database.".format(len(new_entries)))
 
             add_log_entries(new_entries, whale, influx)

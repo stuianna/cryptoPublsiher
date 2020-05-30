@@ -15,6 +15,7 @@ PUBLISHER_NAME = 'crypto_rawPricePublisher'
 DEFULT_TARGET_SYMBOLS = "BTC ETH LTC XRP USDT"
 DEFULT_TARGET_METRICS = "price volume_24h percent_change_1h percent_change_24h percent_change_7d"
 DEFAULT_INFLUX_DB_NAME = 'raw_crypto_price_data'
+DEFAULT_MEASUREMENT_NAME = 'cmc_price_data'
 DEFAULT_INTERVAL_SECONDS = 60
 
 
@@ -44,6 +45,7 @@ def setup_configuration(working_directory):
     config.set_expectation('Settings', 'target_metrics', str, DEFULT_TARGET_METRICS)
     config.set_expectation('Settings', 'update_interval_seconds', int, DEFAULT_INTERVAL_SECONDS)
     config.set_expectation('Settings', 'influx_db_name', str, DEFAULT_INFLUX_DB_NAME)
+    config.set_expectation('Settings', 'measurement_name', str, DEFAULT_MEASUREMENT_NAME)
 
     config_file = os.path.join(working_directory, 'config.ini')
     config.set_configuration_file(config_file)
@@ -74,20 +76,23 @@ def get_symbols_and_metrics(config):
 def start_publisher(sqlite, influx, config):
     symbols, metrics = get_symbols_and_metrics(config)
     interval = config.get_value("Settings", "update_interval_seconds")
+    measurement = config.get_value("Settings", "measurement_name")
     log.info("Starting publisher with symbols: {}, metrics: {} and interval: {}".format(symbols, metrics, interval))
 
     while True:
         for symbol in symbols:
             log.info("Updating symbol {}".format(symbol))
-            last_influx_timestamp = CryptoPublisher.get_last_influx_timestamp(influx, symbol, metrics[0])
-            new_entries, extra_entries = CryptoPublisher.get_new_sqlite_entries(sqlite, symbol, metrics,
-                                                                                last_influx_timestamp)
+            last_influx_timestamp = CryptoPublisher.get_last_influx_timestamp(influx, measurement, metrics[0], 'symbol',
+                                                                              symbol)
+            new_entries, extra_entries, used_fields = CryptoPublisher.get_new_sqlite_entries(
+                sqlite, symbol, metrics + ['symbol'], last_influx_timestamp)
             if new_entries is None:
                 log.error("Cannot request SqLite table for symbol {}".format(symbol))
                 continue
             log.info("Found {} new entries for symbol {}.".format(len(new_entries), symbol))
 
-            if not influx.insert(symbol, new_entries, metrics, None, True):
+            used_fields.remove('symbol')
+            if not influx.insert(measurement, new_entries, used_fields, ['symbol'], True):
                 log.error("Failed to add {} new entries to database.".format(len(new_entries)))
 
         if extra_entries:

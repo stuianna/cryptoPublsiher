@@ -58,13 +58,25 @@ class CryptoPublisher():
             extra_entries = True
 
         if len(df) == 0:
-            return df, False
+            return df, False, fields
 
-        df = df.loc[0:MAXIMUM_UPDATE_SIZE-1, fields + ['timestamp']]
+        df = df.loc[0:MAXIMUM_UPDATE_SIZE - 1, fields + ['timestamp']]
         na_entries = df.isnull().sum().sum()
         if na_entries > 0:
-            log.warning("Dropping {} na entries".format(na_entries))
-        return df.dropna(), extra_entries
+            na_bool = df.isnull().any(axis=1)
+            min_index = na_bool[na_bool == True].idxmax()
+
+            if min_index == 0:
+                field_to_drop = df.isnull()[na_bool].idxmax(axis=1).iloc[0]
+                df = df.drop([field_to_drop], axis=1).head(1)
+                fields.remove(field_to_drop)
+                log.warning("Dropping field {} due to na entry".format(field_to_drop))
+            else:
+                df = df.head(min_index)
+
+            extra_entries = True
+
+        return df, extra_entries, fields
 
     def measurement_exists(influx, measurement):
         all_measurements = influx.get_measurement_names()
@@ -86,9 +98,9 @@ class CryptoPublisher():
     def get_new_sqlite_entries(sqlite, table, column_filter, timestamp):
         new_entries = sqlite.get_row_range(table, 'timestamp', timestamp, int(time.time()))
         if new_entries is None:
-            return None, True
-        new_entries, extra_entries = CryptoPublisher.get_fiends_and_drop_na(new_entries, column_filter)
-        return new_entries, extra_entries
+            return None, True, column_filter
+        new_entries, extra_entries, used_fields = CryptoPublisher.get_fiends_and_drop_na(new_entries, column_filter)
+        return new_entries, extra_entries, used_fields
 
     def create_common_arguments():
         parser = argparse.ArgumentParser()
